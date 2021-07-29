@@ -243,28 +243,35 @@ class RSocketMachineImpl<D, M> implements RSocketMachine<D, M> {
         } else if (status.kind === 'ERROR') {
           this._handleError(status.error);
         }
-      },
-      onSubscribe: subscription =>
-        subscription.request(Number.MAX_SAFE_INTEGER),
-    });
 
-    const MIN_TICK_DURATION = 100;
-    this._keepAliveLastReceivedMillis = Date.now();
-    const keepAliveHandler = () => {
-      const now = Date.now();
-      const noKeepAliveDuration = now - this._keepAliveLastReceivedMillis;
-      if (noKeepAliveDuration >= keepAliveTimeout) {
-        this._handleConnectionError(
-          new Error(`No keep-alive acks for ${keepAliveTimeout} millis`),
-        );
-      } else {
-        this._keepAliveTimerHandle = setTimeout(
-          keepAliveHandler,
-          Math.max(MIN_TICK_DURATION, keepAliveTimeout - noKeepAliveDuration),
-        );
-      }
-    };
-    this._keepAliveTimerHandle = setTimeout(keepAliveHandler, keepAliveTimeout);
+        // Start checking connection lifetime only when connection status is CONNECTED
+        if (status.kind === 'CONNECTED') {
+          if (!this._keepAliveTimerHandle) {
+            const MIN_TICK_DURATION = 100;
+            this._keepAliveLastReceivedMillis = Date.now();
+
+            const keepAliveHandler = () => {
+              const now = Date.now();
+              const noKeepAliveDuration = now - this._keepAliveLastReceivedMillis;
+              if (noKeepAliveDuration >= keepAliveTimeout) {
+                this._connection.reconnect();
+              } else {
+                this._keepAliveTimerHandle = setTimeout(
+                  keepAliveHandler,
+                  Math.max(MIN_TICK_DURATION, keepAliveTimeout - noKeepAliveDuration),
+                );
+              }
+            };
+
+            this._keepAliveTimerHandle = setTimeout(keepAliveHandler, keepAliveTimeout);
+          }
+        } else {
+          // Clear keepalive timer on each connection status which isn't CONNECTED
+          this._clearKeepAliveTimer();
+        }
+      },
+      onSubscribe: subscription => subscription.request(Number.MAX_SAFE_INTEGER),
+    });
   }
 
   setRequestHandler(requestHandler: ?PartialResponder<D, M>): void {
@@ -586,11 +593,7 @@ class RSocketMachineImpl<D, M> implements RSocketMachine<D, M> {
       this._requesterLeaseHandler,
       this._responderLeaseSenderDisposable,
     );
-    const handle = this._keepAliveTimerHandle;
-    if (handle) {
-      clearTimeout(handle);
-      this._keepAliveTimerHandle = null;
-    }
+    this._clearKeepAliveTimer();
   };
 
   _handleConnectionError(error: Error): void {
@@ -599,6 +602,19 @@ class RSocketMachineImpl<D, M> implements RSocketMachine<D, M> {
     const errorHandler = this._errorHandler;
     if (errorHandler) {
       errorHandler(error);
+    }
+  }
+
+  /**
+   * Clear keepalive timer
+   *s
+   * @private
+   */
+  _clearKeepAliveTimer(): void {
+    if (this._keepAliveTimerHandle) {
+      clearTimeout(this._keepAliveTimerHandle);
+
+      this._keepAliveTimerHandle = null;
     }
   }
 

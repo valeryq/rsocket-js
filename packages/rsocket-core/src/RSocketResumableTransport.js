@@ -213,6 +213,10 @@ export default class RSocketResumableTransport implements DuplexConnection {
     }
   }
 
+  reconnect() {
+    throw new Error('not supported');
+  }
+
   connectionStatus(): Flowable<ConnectionStatus> {
     return new Flowable(subscriber => {
       subscriber.onSubscribe({

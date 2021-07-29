@@ -25,14 +25,15 @@ import type {
   SetupFrame,
   Responder,
 } from 'rsocket-types';
+import {CONNECTION_STATUS} from 'rsocket-types';
 import type {PayloadSerializers} from './RSocketSerialization';
 
-import {Flowable, Single, every} from 'rsocket-flowable';
+import {Flowable, Single} from 'rsocket-flowable';
 import invariant from './Invariant';
 import {CONNECTION_STREAM_ID, FLAGS, FRAME_TYPES} from './RSocketFrame';
 import {MAJOR_VERSION, MINOR_VERSION} from './RSocketVersion';
 import {createClientMachine} from './RSocketMachine';
-import {Lease, Leases} from './RSocketLease';
+import {Leases} from './RSocketLease';
 import {RequesterLeaseHandler, ResponderLeaseHandler} from './RSocketLease';
 import {IdentitySerializers} from './RSocketSerialization';
 import {ReassemblyDuplexConnection} from './ReassemblyDuplexConnection';
@@ -177,18 +178,28 @@ class RSocketClientSocket<D, M> implements ReactiveSocket<D, M> {
       responderLeaseHandler,
     );
 
-    // Send SETUP
-    connection.sendOne(this._buildSetupFrame(config));
+    let keepAliveTimerID = null;
+    let lastConnectionStatus = null;
+    connection.connectionStatus().subscribe({
+      onNext: status => {
+        // Clear send keep alive frames if connection status isn't CONNECTED
+        if (status !== CONNECTION_STATUS.CONNECTED) {
+          clearInterval(keepAliveTimerID);
+        }
 
-    // Send KEEPALIVE frames
-    const keepAliveFrames = every(keepAlive).map(() => ({
-      data: null,
-      flags: FLAGS.RESPOND,
-      lastReceivedPosition: 0,
-      streamId: CONNECTION_STREAM_ID,
-      type: FRAME_TYPES.KEEPALIVE,
-    }));
-    connection.send(keepAliveFrames);
+        // Retrieve connection setup and sending keepalive frames if connection status is CONNECTED
+        if (status !== lastConnectionStatus && status === CONNECTION_STATUS.CONNECTED) {
+          // Send SETUP
+          connection.sendOne(this._buildSetupFrame(config));
+
+          // Send KEEPALIVE frames
+          keepAliveTimerID = this._sendKeepAliveFrames(connection, keepAlive);
+        }
+
+        lastConnectionStatus = status;
+      },
+      onSubscribe: subscription => subscription.request(Number.MAX_SAFE_INTEGER),
+    });
   }
 
   fireAndForget(payload: Payload<D, M>): void {
@@ -255,5 +266,17 @@ class RSocketClientSocket<D, M> implements ReactiveSocket<D, M> {
       streamId: CONNECTION_STREAM_ID,
       type: FRAME_TYPES.SETUP,
     };
+  }
+
+  _sendKeepAliveFrames(connection, keepAlive): IntervalID {
+    const keepAliveFrame = {
+      data: null,
+      flags: FLAGS.RESPOND,
+      lastReceivedPosition: 0,
+      streamId: CONNECTION_STREAM_ID,
+      type: FRAME_TYPES.KEEPALIVE,
+    };
+
+    return setInterval(() => connection.sendOne(keepAliveFrame), keepAlive);
   }
 }

@@ -202,6 +202,10 @@ class WSDuplexConnection implements DuplexConnection {
     throw new Error('not supported');
   }
 
+  reconnect(): void {
+    throw new Error('not supported');
+  }
+
   connectionStatus(): Flowable<ConnectionStatus> {
     return new Flowable(subscriber => {
       subscriber.onSubscribe({

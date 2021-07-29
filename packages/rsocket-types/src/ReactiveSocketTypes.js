@@ -130,6 +130,11 @@ export interface DuplexConnection {
   connect(): void,
 
   /**
+   * Reconnect the underlying connection.
+   */
+  reconnect(): void,
+
+  /**
    * Returns a Flowable that immediately publishes the current connection
    * status and thereafter updates as it changes. Once a connection is in
    * the CLOSED or ERROR state, it may not be connected again.
@@ -150,6 +155,7 @@ export interface DuplexConnection {
 export type ConnectionStatus =
   | {kind: 'NOT_CONNECTED'}
   | {kind: 'CONNECTING'}
+  | {kind: 'RECONNECTING'}
   | {kind: 'CONNECTED'}
   | {kind: 'CLOSED'}
   | {kind: 'ERROR', error: Error};
@@ -159,6 +165,7 @@ export const CONNECTION_STATUS = {
   CONNECTED: Object.freeze({kind: 'CONNECTED'}),
   CONNECTING: Object.freeze({kind: 'CONNECTING'}),
   NOT_CONNECTED: Object.freeze({kind: 'NOT_CONNECTED'}),
+  RECONNECTING: Object.freeze({kind: 'RECONNECTING'}),
 };
 
 /**

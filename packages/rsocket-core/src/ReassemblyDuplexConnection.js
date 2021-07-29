@@ -45,6 +45,10 @@ export class ReassemblyDuplexConnection implements DuplexConnection {
     this._source.connect();
   }
 
+  reconnect(): void {
+    this._source.reconnect();
+  }
+
   connectionStatus(): Flowable<ConnectionStatus> {
     return this._source.connectionStatus();
   }

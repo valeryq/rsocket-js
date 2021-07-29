@@ -29,6 +29,7 @@ import {
   serializeFrame,
   serializeFrameWithLength,
   toBuffer,
+  FRAME_TYPES,
 } from 'rsocket-core';
 import {CONNECTION_STATUS} from 'rsocket-types';
 
@@ -37,6 +38,7 @@ export type ClientOptions = {|
   wsCreator?: (url: string) => WebSocket,
   debug?: boolean,
   lengthPrefixedFrames?: boolean,
+  reconnectInterval?: number,
 |};
 
 /**
@@ -50,6 +52,7 @@ export default class RSocketWebSocketClient implements DuplexConnection {
   _socket: ?WebSocket;
   _status: ConnectionStatus;
   _statusSubscribers: Set<ISubject<ConnectionStatus>>;
+  _streamsToResubscribe: Map<number, Frame>;
 
   constructor(options: ClientOptions, encoders: ?Encoders<*>) {
     this._encoders = encoders;
@@ -59,10 +62,11 @@ export default class RSocketWebSocketClient implements DuplexConnection {
     this._socket = null;
     this._status = CONNECTION_STATUS.NOT_CONNECTED;
     this._statusSubscribers = new Set();
+    this._streamsToResubscribe = new Map();
   }
 
   close(): void {
-    this._close();
+    this._close(undefined, true);
   }
 
   connect(): void {
@@ -85,6 +89,37 @@ export default class RSocketWebSocketClient implements DuplexConnection {
     (socket.addEventListener: $FlowIssue)('error', this._handleError);
     (socket.addEventListener: $FlowIssue)('open', this._handleOpened);
     (socket.addEventListener: $FlowIssue)('message', this._handleMessage);
+  }
+
+  reconnect(): void {
+    this._setConnectionStatus(CONNECTION_STATUS.RECONNECTING);
+
+    // Remove all event listeners for existent socket connection
+    if (this._socket) {
+      const socket = this._socket;
+      (socket.removeEventListener: $FlowIssue)('close', this._handleClosed);
+      (socket.removeEventListener: $FlowIssue)('error', this._handleError);
+      (socket.removeEventListener: $FlowIssue)('open', this._handleOpened);
+      (socket.removeEventListener: $FlowIssue)('message', this._handleMessage);
+
+      socket.close();
+      this._socket = null;
+    }
+
+    setTimeout(() => {
+      const {wsCreator} = this._options;
+      const {url} = this._options;
+
+      this._socket = wsCreator ? wsCreator(url) : new WebSocket(url);
+
+      const socket = this._socket;
+      socket.binaryType = 'arraybuffer';
+
+      (socket.addEventListener: $FlowIssue)('close', this._handleClosed);
+      (socket.addEventListener: $FlowIssue)('error', this._handleError);
+      (socket.addEventListener: $FlowIssue)('open', this._handleOpened);
+      (socket.addEventListener: $FlowIssue)('message', this._handleMessage);
+    }, this._options.reconnectInterval || 0);
   }
 
   connectionStatus(): Flowable<ConnectionStatus> {
@@ -115,6 +150,16 @@ export default class RSocketWebSocketClient implements DuplexConnection {
   }
 
   sendOne(frame: Frame): void {
+    // Add stream to resubscribe map if frame type is stream or channel
+    if ([FRAME_TYPES.REQUEST_STREAM, FRAME_TYPES.REQUEST_CHANNEL].includes(frame.type)) {
+      this._streamsToResubscribe.set(frame.streamId, frame);
+    }
+
+    // Remove stream from resubscribe map if someone canceled stream
+    if (frame.type === FRAME_TYPES.CANCEL && this._streamsToResubscribe.has(frame.streamId)) {
+      this._streamsToResubscribe.delete(frame.streamId);
+    }
+
     this._writeFrame(frame);
   }
 
@@ -137,7 +182,14 @@ export default class RSocketWebSocketClient implements DuplexConnection {
     });
   }
 
-  _close(error?: Error) {
+  _close(error?: Error, force?: boolean) {
+    // Reconnect if something went wrong with connection
+    if (this._options.reconnectInterval && !force) {
+      this.reconnect();
+
+      return;
+    }
+
     if (this._status.kind === 'CLOSED' || this._status.kind === 'ERROR') {
       // already closed
       return;
@@ -184,6 +236,9 @@ export default class RSocketWebSocketClient implements DuplexConnection {
 
   _handleOpened = (): void => {
     this._setConnectionStatus(CONNECTION_STATUS.CONNECTED);
+
+    // Try to re-subscribe last subscriptions by last sent frames
+    this._streamsToResubscribe.forEach(frame => this.sendOne(frame));
   };
 
   _handleMessage = (message: MessageEvent): void => {
@@ -209,6 +264,11 @@ export default class RSocketWebSocketClient implements DuplexConnection {
   }
 
   _writeFrame(frame: Frame): void {
+    // Skip sending frame while connection status isn't CONNECTED
+    if (this._status.kind !== 'CONNECTED') {
+      return;
+    }
+
     try {
       if (__DEV__) {
         if (this._options.debug) {

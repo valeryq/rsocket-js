@@ -67,6 +67,10 @@ export class RSocketTcpConnection implements DuplexConnection {
     throw new Error('not supported');
   }
 
+  reconnect(): void {
+    throw new Error('not supported');
+  }
+
   setupSocket(socket: net$Socket) {
     this._socket = socket;
     socket.on('close', this._handleError);
